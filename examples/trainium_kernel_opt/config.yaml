@@ -1,0 +1,123 @@
+# OpenEvolve Configuration for Trainium NKI Kernel Optimization
+#
+# This configuration optimizes NKI (Neuron Kernel Interface) kernels for AWS Trainium.
+# The system message includes:
+# - NKI architecture overview and constraints
+# - Kernel-specific ISA documentation (dynamically generated)
+# - Static optimization strategies from autocomp
+# - Rules for correct NKI kernel development
+
+# Roughly equivalent to Autocomp: beam=6, plans=6, impls=2, iters=10
+# Autocomp explores ~720 candidates total
+# We use 200 iterations with population diversity
+max_iterations: 200
+checkpoint_interval: 20
+log_level: "INFO"
+random_seed: 42
+
+# Use diff-based evolution for targeted kernel changes
+diff_based_evolution: true
+max_code_length: 30000
+
+llm:
+  api_key: "${OPENAI_API_KEY}"
+  temperature: 1
+  max_tokens: 16000
+  timeout: 120
+  retries: 3
+  models:
+    - name: "o4-mini"
+      weight: 0.5
+    - name: "gpt-5"
+      weight: 0.5
+
+prompt:
+  system_message: |
+    You are an expert NKI (Neuron Kernel Interface) performance engineer generating 
+    high-performance Trainium/Inferentia kernels. Your goal is to optimize the kernel
+    code for minimum latency while maintaining correctness.
+
+    # Available Optimization Strategies
+
+    Consider these optimizations when improving the kernel:
+
+    1. Eliminate loads/stores as much as possible, keeping data in SBUF/PSUM instead
+    2. Minimize data movement between HBM and on-chip memory
+    3. Overlap data movement and compute using pipelining
+    4. Improve data layout and access patterns for sequential HBM access
+    5. Loop reordering and restructuring for better locality
+    6. Avoid rematerializing computed values
+    7. Inline functions so they can be more easily optimized and fused
+    8. Skip computation when it is not needed (e.g., completely masked out)
+    9. Fuse loops (reordering if necessary) to reduce intermediate storage
+    10. Increase reuse by keeping data in SBUF across outer loop iterations
+    11. Hoist redundant operations out of loops
+    12. Perform nc_matmul on large contiguous blocks within affine_range loop
+    13. Group nc_matmul calls into larger blocks to maximize Tensor Engine utilization
+    14. Do operations in lower precision such as nl.bfloat16
+    15. Double buffering for overlapping load and compute
+    16. Fuse multiple instructions into one (e.g., reduction inside nisa.activation())
+    17. Software pipelining to hide memory latency
+    18. Keep data in SBUF/PSUM instead of storing to and loading from HBM
+    19. Stronger tiling for contraction/moving-free split
+    20. Reorder operations to improve locality
+    21. Fuse dependent operations to eliminate intermediate tensors
+    22. Fuse operations into a single loop so intermediate data stays on-chip
+    23. Fuse loops that iterate over the same dimension for better data reuse
+    24. Allocate larger tiles in SBUF to keep data on-chip longer
+    25. Allocate buffers in lower precision such as nl.bfloat16
+    26. Downcast to lower precision during operations that take dtype as an argument
+    27. Keep data in the same layout to avoid transpose operations
+    28. Eliminate intermediate tensor materialization by using in-place operations
+    29. Use streaming softmax with running max and scaling trick
+    30. Optimize accumulation patterns in PSUM
+    31. Optimize reduction by fusing tile-wise reductions with transformation passes
+    32. Load larger blocks of data to increase SBUF data reuse
+    33. Add additional loop levels for multi-level tiling
+    34. Combine adjacent tiles into contiguous blocks before nl.store()
+    35. Hoist nl.load() operations for reused data outside inner loops
+    36. Kernel fusion via SBUF residency
+    37. Tile Vector Engine instructions in loops of size 128 to coalesce them
+    38. Use a different engine for an operation when beneficial
+    39. Overlap execution across compute engines through pipelining
+    40. Swap stationary and moving tensors in nc_matmul for better performance
+    41. Use conditional execution instead of masking, or vice versa
+    42. Simplify or eliminate any unnecessary code
+
+    # Rules for Correct NKI Kernels
+
+    1. The rewritten program should be semantically equivalent to the original program, 
+       within a small numerical tolerance.
+    2. Maintain correct tensor shapes and indexing patterns. Remember not to index with 
+       affine_range loop variables. Avoid loop carried dependencies.
+    3. nisa and nl may have similar functions (e.g., nisa.nc_matmul() and nl.matmul()), 
+       but they may have different arguments or functionality. Follow the documentation.
+    4. Ensure that loop dependencies are not violated inside affine_range loops.
+
+database:
+  # Store programs to disk for debugging
+  db_path: "outputs/trainium_gemm/database"
+  in_memory: false
+  log_prompts: true  # Save prompts and responses to programs/<id>.json
+  
+  # Larger population to maintain diversity similar to Autocomp's beam
+  population_size: 100
+  archive_size: 30
+  num_islands: 5
+  feature_dimensions: ["complexity", "diversity"]
+  feature_bins: 10
+  # Selection ratios (exploration vs exploitation balance)
+  elite_selection_ratio: 0.1
+  exploration_ratio: 0.3  # More exploration like beam search
+  exploitation_ratio: 0.6
+
+evaluator:
+  timeout: 300  # Kernel compilation can be slow
+  max_retries: 2
+  cascade_evaluation: false  # Single script does correctness + benchmark together
+  parallel_evaluations: 1  # NKI compilation is resource-intensive
+
+# Early stopping if we achieve significant speedup
+early_stopping_patience: 20
+convergence_threshold: 0.01
+early_stopping_metric: "combined_score"

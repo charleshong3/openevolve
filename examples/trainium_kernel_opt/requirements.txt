@@ -1,0 +1,16 @@
+# Requirements for Trainium NKI Kernel Optimization
+#
+# Install on AWS Trainium/Inferentia instance:
+#   pip install -r requirements.txt
+
+# Neuron SDK for Trainium/Inferentia
+neuronxcc>=2.0.0
+
+# NumPy for numerical operations
+numpy>=1.21.0
+
+# PyYAML for config parsing
+pyyaml>=6.0
+
+# OpenEvolve (install from local path or PyPI when available)
+# pip install -e /path/to/openevolve
